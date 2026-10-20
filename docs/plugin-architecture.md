@@ -298,12 +298,15 @@ handle: `run "MY_CMD 2F 30"`.
 
 #### Selection ghost preview (proposed)
 
-`PreviewWire::SelectionGhost { transforms, color }` lets an interactive
+`PreviewWire::SelectionGhost { transforms }` lets an interactive
 command preview a transform of the current selection without reading or
 transforming entity geometry in the plugin. When the command starts, the host
-captures the preview geometry of the selected entities; whenever
-`on_cursor_move` returns a `SelectionGhost`, the host draws that captured
-geometry after applying `transforms` in order:
+only remembers which entities are selected. Whenever `on_cursor_move` returns
+a `SelectionGhost`, the host copies those entities, applies `transforms` in
+order with its own entity transform code and draws the copies like any other
+command preview (the document is not changed). No preview geometry is built
+unless a plugin asks for it, so native commands and plugins that do not use
+the variant are unaffected:
 
 - `PreviewTransform::Translate { delta }`
 - `PreviewTransform::Rotate { center, axis, angle_rad }`
