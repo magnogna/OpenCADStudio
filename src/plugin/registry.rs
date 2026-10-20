@@ -74,7 +74,8 @@ pub(crate) fn try_dispatch(app: &mut OpenCADStudio, tab: usize, cmd: &str) -> bo
                 Box::new(
                     crate::app::plugin_host::PluginProcessInteractiveAdapter::new(
                         process, command_id,
-                    ),
+                    )
+                    .with_ghost_source(app.selection_ghost_wires(tab)),
                 ),
             );
         }

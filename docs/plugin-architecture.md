@@ -296,6 +296,31 @@ set `needs_object_pick() -> true`; the host then calls
 XDATA/geometry via `HostApi`). Over `--serve` the pick is supplied as a hex
 handle: `run "MY_CMD 2F 30"`.
 
+#### Selection ghost preview (proposed)
+
+`PreviewWire::SelectionGhost { transforms, color }` lets an interactive
+command preview a transform of the current selection without reading or
+transforming entity geometry in the plugin. When the command starts, the host
+captures the preview geometry of the selected entities; whenever
+`on_cursor_move` returns a `SelectionGhost`, the host draws that captured
+geometry after applying `transforms` in order:
+
+- `PreviewTransform::Translate { delta }`
+- `PreviewTransform::Rotate { center, axis, angle_rad }`
+- `PreviewTransform::Mirror { p1, p2 }` (mirror line in plan)
+
+Example: a "copy, move, then rotate" command returns
+`[Translate { delta: cursor - base }, Rotate { center: cursor, .. }]` while the
+user picks the destination, then the rotation step. The ghost can be mixed with
+ordinary polylines, circles and arcs (rubber bands, angle arcs). An empty
+selection draws nothing, and the variant is ignored in grip-drag previews.
+
+The preview is display only: committing the edit is still done by the plugin
+(for example by running native commands with all arguments inside one
+`begin_undo_block` scope). The variant is additive, but a host that predates
+it cannot decode it, so plugins should only return it when the host's API
+version supports it.
+
 ### XDATA — domain persistence
 
 Store domain data on entities as XDATA (under your `xdata_apps` ids), not in a

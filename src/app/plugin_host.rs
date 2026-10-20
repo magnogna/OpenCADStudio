@@ -4114,6 +4114,9 @@ pub(crate) struct PluginProcessInteractiveAdapter {
     prompt: Option<String>,
     needs_entity_pick: Option<bool>,
     is_done: bool,
+    /// Preview geometry of the selection captured when the command started;
+    /// source of `PreviewWire::SelectionGhost`.
+    ghost_source: Vec<crate::scene::model::wire_model::WireModel>,
 }
 
 impl PluginProcessInteractiveAdapter {
@@ -4129,7 +4132,17 @@ impl PluginProcessInteractiveAdapter {
             prompt,
             needs_entity_pick,
             is_done: false,
+            ghost_source: Vec::new(),
         }
+    }
+
+    /// Capture the selection preview used by `PreviewWire::SelectionGhost`.
+    pub(crate) fn with_ghost_source(
+        mut self,
+        wires: Vec<crate::scene::model::wire_model::WireModel>,
+    ) -> Self {
+        self.ghost_source = wires;
+        self
     }
 
     fn refresh(&mut self) {
@@ -4239,8 +4252,42 @@ impl crate::command::CadCommand for PluginProcessInteractiveAdapter {
             .process
             .on_cursor_move(self.command_id, [pt.x as f64, pt.y as f64, pt.z as f64])
             .unwrap_or_default();
-        convert_preview_wires(raw_wires)
+        let mut out = Vec::new();
+        let mut plain = Vec::with_capacity(raw_wires.len());
+        for w in raw_wires {
+            match w {
+                ocs_plugin_api::host::PreviewWire::SelectionGhost { transforms, color } => {
+                    out.extend(selection_ghost_wires(&self.ghost_source, &transforms, color));
+                }
+                other => plain.push(other),
+            }
+        }
+        out.extend(convert_preview_wires(plain));
+        out
     }
+}
+
+/// Host-drawn ghost of `source` after the ordered `transforms`
+/// (`PreviewWire::SelectionGhost`).
+pub(in crate::app) fn selection_ghost_wires(
+    source: &[crate::scene::model::wire_model::WireModel],
+    transforms: &[ocs_plugin_api::host::PreviewTransform],
+    color: Option<[f32; 4]>,
+) -> Vec<crate::scene::model::wire_model::WireModel> {
+    use ocs_plugin_api::host::PreviewTransform;
+    source
+        .iter()
+        .map(|w| {
+            let mut g = w.mapped(|p| {
+                let q = PreviewTransform::apply_all(transforms, [p.x, p.y, p.z]);
+                glam::DVec3::new(q[0], q[1], q[2])
+            });
+            if let Some(c) = color {
+                g.color = c;
+            }
+            g
+        })
+        .collect()
 }
 
 /// Convert plugin-declared preview wires to scene wire models. Shared by the
@@ -4322,6 +4369,9 @@ pub(in crate::app) fn convert_preview_wires(
                 });
                 Some(wire)
             }
+            // Needs the start-time selection; only interactive-command
+            // previews resolve it (see `on_preview_wires`).
+            PreviewWire::SelectionGhost { .. } => None,
         })
         .collect()
 }
@@ -15016,5 +15066,61 @@ step('undo_move', lambda: M.move([u], (0, 0, 0), (7, 0, 0)))
         let initial_grid = host.app.show_grid;
         assert!(host.execute_command("GRID\n"));
         assert_eq!(host.app.show_grid, !initial_grid);
+    }
+}
+
+#[cfg(test)]
+mod selection_ghost_tests {
+    use super::selection_ghost_wires;
+    use crate::scene::model::wire_model::WireModel;
+    use ocs_plugin_api::host::{PreviewTransform, PreviewWire};
+
+    fn src() -> Vec<WireModel> {
+        vec![WireModel::solid_f64(
+            "e".into(),
+            vec![[1.0, 0.0, 0.0], [2.0, 0.0, 0.0]],
+            WireModel::CYAN,
+            false,
+        )]
+    }
+
+    fn first(w: &WireModel) -> [f64; 2] {
+        let p = w.points[0];
+        [p[0] as f64, p[1] as f64]
+    }
+
+    fn close(a: [f64; 2], b: [f64; 2]) -> bool {
+        (a[0] - b[0]).abs() < 1e-5 && (a[1] - b[1]).abs() < 1e-5
+    }
+
+    #[test]
+    fn selection_ghost_translate_then_rotate_in_order() {
+        let t = vec![
+            PreviewTransform::Translate { delta: [10.0, 0.0, 0.0] },
+            PreviewTransform::Rotate {
+                center: [10.0, 0.0, 0.0],
+                axis: [0.0, 0.0, 1.0],
+                angle_rad: std::f64::consts::FRAC_PI_2,
+            },
+        ];
+        let g = selection_ghost_wires(&src(), &t, None);
+        assert_eq!(g.len(), 1);
+        assert!(close(first(&g[0]), [10.0, 1.0]), "{:?}", g[0].points[0]);
+    }
+
+    #[test]
+    fn selection_ghost_mirror_leaves_source_untouched() {
+        let s = src();
+        let t = vec![PreviewTransform::Mirror { p1: [0.0, 0.0, 0.0], p2: [0.0, 1.0, 0.0] }];
+        let g = selection_ghost_wires(&s, &t, Some([1.0, 0.0, 0.0, 1.0]));
+        assert!(close(first(&g[0]), [-1.0, 0.0]));
+        assert_eq!(g[0].color, [1.0, 0.0, 0.0, 1.0]);
+        assert!(close(first(&s[0]), [1.0, 0.0]));
+    }
+
+    #[test]
+    fn selection_ghost_is_ignored_by_plain_conversion() {
+        let w = super::convert_preview_wires(vec![PreviewWire::selection_ghost(vec![])]);
+        assert!(w.is_empty());
     }
 }

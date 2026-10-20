@@ -853,9 +853,96 @@ pub enum PreviewWire {
         end_angle_rad: f64,
         color: Option<[f32; 4]>,
     },
+    /// A "ghost" of the entities that were selected when the plugin's
+    /// interactive command started, drawn by the HOST from its own preview
+    /// geometry, like the ghost shown by the native MOVE / ROTATE / MIRROR
+    /// commands.
+    ///
+    /// `transforms` are applied in order (for example a translation, then a
+    /// rotation about the moved base point), so a plugin can preview a
+    /// composite edit without reading or transforming entity geometry itself.
+    /// An empty list draws the selection in place. Nothing is drawn when the
+    /// selection was empty. `color` defaults to the host preview color.
+    /// Ignored outside interactive-command previews (e.g. grip drags).
+    SelectionGhost {
+        transforms: Vec<PreviewTransform>,
+        color: Option<[f32; 4]>,
+    },
+}
+
+/// One step of a [`PreviewWire::SelectionGhost`] transform. World
+/// coordinates; angles in radians, counter-clockwise about `axis`
+/// (use `[0.0, 0.0, 1.0]` in plan).
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+pub enum PreviewTransform {
+    /// Move by `delta`.
+    Translate { delta: [f64; 3] },
+    /// Rotate by `angle_rad` about the axis through `center`.
+    Rotate {
+        center: [f64; 3],
+        axis: [f64; 3],
+        angle_rad: f64,
+    },
+    /// Reflect across the plane that contains the line `p1`-`p2` and the
+    /// Z axis (a 2D mirror line in plan).
+    Mirror { p1: [f64; 3], p2: [f64; 3] },
+}
+
+impl PreviewTransform {
+    /// Apply this step to a world point.
+    pub fn apply(&self, p: [f64; 3]) -> [f64; 3] {
+        match *self {
+            Self::Translate { delta } => [p[0] + delta[0], p[1] + delta[1], p[2] + delta[2]],
+            Self::Rotate { center, axis, angle_rad } => {
+                let len = (axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]).sqrt();
+                if !(len > 0.0) || !angle_rad.is_finite() {
+                    return p;
+                }
+                let k = [axis[0] / len, axis[1] / len, axis[2] / len];
+                let v = [p[0] - center[0], p[1] - center[1], p[2] - center[2]];
+                let (s, c) = angle_rad.sin_cos();
+                let kxv = [
+                    k[1] * v[2] - k[2] * v[1],
+                    k[2] * v[0] - k[0] * v[2],
+                    k[0] * v[1] - k[1] * v[0],
+                ];
+                let kdv = k[0] * v[0] + k[1] * v[1] + k[2] * v[2];
+                let mut out = [0.0; 3];
+                for i in 0..3 {
+                    out[i] = center[i] + v[i] * c + kxv[i] * s + k[i] * kdv * (1.0 - c);
+                }
+                out
+            }
+            Self::Mirror { p1, p2 } => {
+                let d = [p2[0] - p1[0], p2[1] - p1[1]];
+                let len2 = d[0] * d[0] + d[1] * d[1];
+                if !(len2 > 0.0) {
+                    return p;
+                }
+                let v = [p[0] - p1[0], p[1] - p1[1]];
+                let t = (v[0] * d[0] + v[1] * d[1]) / len2;
+                let foot = [p1[0] + d[0] * t, p1[1] + d[1] * t];
+                [2.0 * foot[0] - p[0], 2.0 * foot[1] - p[1], p[2]]
+            }
+        }
+    }
+
+    /// Apply `steps` in order to a world point.
+    pub fn apply_all(steps: &[PreviewTransform], p: [f64; 3]) -> [f64; 3] {
+        steps.iter().fold(p, |acc, t| t.apply(acc))
+    }
 }
 
 impl PreviewWire {
+    /// A host-drawn ghost of the start-time selection after `transforms`.
+    pub fn selection_ghost(transforms: Vec<PreviewTransform>) -> Self {
+        Self::SelectionGhost {
+            transforms,
+            color: None,
+        }
+    }
+
     /// Create a polyline preview wire with default host cyan color.
     pub fn new(points: Vec<[f64; 3]>) -> Self {
         Self::Polyline {
@@ -870,6 +957,7 @@ impl PreviewWire {
             Self::Polyline { color, .. } => *color,
             Self::Circle { color, .. } => *color,
             Self::Arc { color, .. } => *color,
+            Self::SelectionGhost { color, .. } => *color,
         }
     }
 

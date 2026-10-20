@@ -4736,6 +4736,16 @@ pub enum SystemClipboardText {
 }
 
 impl OpenCADStudio {
+    /// Preview geometry of the selected entities of `tab`, in selection
+    /// order; seeds `PreviewWire::SelectionGhost` for plugin commands.
+    pub(crate) fn selection_ghost_wires(
+        &self,
+        tab: usize,
+    ) -> Vec<crate::scene::model::wire_model::WireModel> {
+        let scene = &self.tabs[tab].scene;
+        scene.wire_models_for(&scene.selected_handles_in_order())
+    }
+
     /// Install the Start-page video list, decoding each thumbnail's JPEG into
     /// an image Handle exactly once (a fresh Handle per view frame would
     /// re-upload the texture every frame).
